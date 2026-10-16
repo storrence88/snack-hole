@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snack Hole</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Snack Hole">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
+<style>
+  /* Layout: one full-screen canvas, HUD pinned to the top safe area, size tag tracking the hole */
+  :root {
+    --ground: #c4733a;
+    --ground-deep: #8a4520;
+    --ink: #2b1a12;
+    --cream: #fff6e8;
+    --frosting: #ff86ad;
+    --mint: #3cc0b5;
+    --display: "Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif;
+    --body: "Nunito", ui-rounded, system-ui, -apple-system, sans-serif;
+    color-scheme: light;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  body {
+    background: var(--ground);
+    color: var(--cream);
+    font-family: var(--body);
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+
+  .hud {
+    position: fixed; left: 0; right: 0; top: 0;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; gap: 12px;
+    pointer-events: none;
+  }
+  .level-chip {
+    font-family: var(--display); font-size: 18px; letter-spacing: .02em;
+    background: var(--ink); color: var(--cream);
+    padding: 6px 12px 5px; border-radius: 999px; white-space: nowrap;
+  }
+  .goal { flex: 1; min-width: 0; }
+  .goal-bar {
+    height: 14px; border-radius: 999px; background: rgba(43,26,18,.35);
+    border: 2px solid var(--ink); overflow: hidden;
+  }
+  .goal-fill {
+    height: 100%; width: 0%;
+    background: repeating-linear-gradient(-45deg, var(--frosting) 0 8px, #ffb3cb 8px 16px);
+    transition: width .25s ease-out;
+  }
+  .goal-label {
+    font-family: var(--display); font-size: 13px; margin-top: 3px;
+    color: var(--cream); text-shadow: 0 1px 0 var(--ink); letter-spacing: .03em;
+    font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .icon-btn {
+    pointer-events: auto;
+    width: 40px; height: 40px; border-radius: 50%;
+    border: 2px solid var(--ink); background: var(--cream); color: var(--ink);
+    font-family: var(--display); font-size: 16px; line-height: 1;
+    display: grid; place-items: center; cursor: pointer;
+  }
+  .icon-btn:focus-visible, .big-btn:focus-visible { outline: 3px solid var(--mint); outline-offset: 2px; }
+  .icon-btn svg { width: 20px; height: 20px; }
+
+  .size-tag {
+    position: fixed; left: 0; top: 0; pointer-events: none;
+    transform: translate(-50%, 0);
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    will-change: transform;
+  }
+  .size-tag b {
+    font-family: var(--display); font-weight: 400; font-size: 22px; color: #fff;
+    -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill;
+    letter-spacing: .02em; line-height: 1;
+  }
+  .size-tag.bump b { animation: bump .5s ease-out; }
+  @keyframes bump { 0% { transform: scale(1); } 35% { transform: scale(1.5); } 100% { transform: scale(1); } }
+  .size-meter { width: 64px; height: 6px; border-radius: 4px; background: rgba(43,26,18,.45); overflow: hidden; }
+  .size-meter i { display: block; height: 100%; width: 0%; background: #fff; border-radius: 4px; }
+
+  .pop {
+    position: fixed; left: 0; top: 0; pointer-events: none;
+    font-family: var(--display); font-size: 26px; color: #fff;
+    -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill;
+    animation: rise .8s ease-out forwards;
+  }
+  @keyframes rise {
+    0% { opacity: 0; translate: 0 0; scale: .6; }
+    15% { opacity: 1; scale: 1.1; }
+    100% { opacity: 0; translate: var(--dx, 0px) -90px; scale: 1; }
+  }
+  .levelup {
+    position: fixed; left: 50%; top: 22%; transform: translateX(-50%);
+    font-family: var(--display); font-size: 40px; color: #ffe066; white-space: nowrap;
+    -webkit-text-stroke: 7px var(--ink); paint-order: stroke fill;
+    pointer-events: none; animation: banner 1.4s ease-out forwards;
+  }
+  @keyframes banner {
+    0% { opacity: 0; scale: .4; } 15% { opacity: 1; scale: 1.15; } 30% { scale: 1; }
+    80% { opacity: 1; } 100% { opacity: 0; translate: 0 -30px; }
+  }
+
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: radial-gradient(circle at 50% 40%, rgba(196,115,58,.55), rgba(70,32,14,.85));
+  }
+  .card {
+    width: min(360px, 100%);
+    background: var(--cream); color: var(--ink);
+    border: 3px solid var(--ink); border-radius: 28px;
+    padding: 26px 22px 22px; text-align: center;
+    box-shadow: 0 8px 0 var(--ink);
+    display: flex; flex-direction: column; gap: 14px; align-items: center;
+  }
+  .card h1, .card h2 {
+    margin: 0; font-family: var(--display); font-weight: 400; line-height: .95;
+    text-wrap: balance; color: var(--ink);
+  }
+  .card h1 { font-size: 56px; }
+  .card h1 span { color: var(--frosting); -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; }
+  .card h2 { font-size: 36px; }
+  .card p { margin: 0; font-size: 16px; line-height: 1.45; max-width: 30ch; }
+  .demo-hole {
+    width: 92px; height: 34px; border-radius: 50%;
+    background: radial-gradient(ellipse at 50% 60%, #000 55%, #3a3540 70%, #e9e6ef 72%, #c9c5d2 100%);
+    position: relative; margin: 6px 0 2px;
+  }
+  .demo-hole::after {
+    content: ""; position: absolute; left: 34px; top: -26px; width: 24px; height: 24px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #ffd1df, var(--frosting));
+    border: 2px solid var(--ink); animation: drop 1.6s ease-in infinite;
+  }
+  @keyframes drop { 0%, 20% { transform: translateY(0); opacity: 1; } 70% { transform: translateY(26px) scale(.7); opacity: 1; } 71%, 100% { opacity: 0; transform: translateY(26px) scale(.7); } }
+  .stats { display: flex; gap: 10px; width: 100%; }
+  .stat { flex: 1; background: #ffe6cc; border-radius: 14px; padding: 8px 4px; }
+  .stat b { display: block; font-family: var(--display); font-weight: 400; font-size: 26px; font-variant-numeric: tabular-nums; }
+  .stat small { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; }
+  .big-btn {
+    font-family: var(--display); font-size: 26px; letter-spacing: .02em;
+    background: var(--frosting); color: var(--ink);
+    border: 3px solid var(--ink); border-radius: 999px;
+    padding: 10px 40px 8px; box-shadow: 0 5px 0 var(--ink);
+    cursor: pointer; touch-action: manipulation;
+  }
+  .big-btn:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--ink); }
+  .hint { font-size: 12px; opacity: .7; }
+  .fail { color: var(--ink); }
+  @media (prefers-reduced-motion: reduce) {
+    .demo-hole::after, .size-tag.bump b, .levelup { animation-duration: .01s; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div class="hud" id="hud" hidden>
+  <div class="level-chip" id="levelChip">Level 1</div>
+  <div class="goal">
+    <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
+    <div class="goal-label" id="goalLabel">0% eaten</div>
+  </div>
+  <button class="icon-btn" id="soundBtn" aria-label="Sound on" title="Sound">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path id="soundWave" d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>
+  </button>
+  <button class="icon-btn" id="restartBtn" aria-label="Restart level" title="Restart level">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/></svg>
+  </button>
+</div>
+
+<div class="size-tag" id="sizeTag" hidden><b id="sizeText">Size 1</b><div class="size-meter"><i id="sizeFill"></i></div></div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <h1>Snack <span>Hole</span></h1>
+    <div class="demo-hole" aria-hidden="true"></div>
+    <p>Drag anywhere to slide the hole, or just move your mouse on a computer. Anything smaller than the hole falls in. Eat enough and the hole grows, so you can swallow cupcakes, burgers and whole cakes.</p>
+    <button class="big-btn" id="playBtn">Play</button>
+    <div class="hint" id="startHint">Clear 80% of the snacks to finish a level</div>
+  </div>
+</div>
+
+<div class="overlay" id="winScreen" hidden>
+  <div class="card">
+    <h2 id="winTitle">Level 1 cleared</h2>
+    <div class="stats">
+      <div class="stat"><b id="statItems">0</b><small>Snacks</small></div>
+      <div class="stat"><b id="statSize">1</b><small>Size</small></div>
+      <div class="stat"><b id="statTime">0:00</b><small>Time</small></div>
+    </div>
+    <button class="big-btn" id="nextBtn">Next level</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js';
+
+// ---------- tuning ----------
+const RADII = [0.5, 0.7, 0.95, 1.3, 1.75, 2.5, 3.3, 4.2];
+const XP_AT = [0, 25, 90, 220, 450, 800, 1300, 2000];   // xp needed to reach size index
+const FIT = 0.92;           // item fits when its radius <= hole radius * FIT
+const GOAL = 0.8;           // fraction of level xp to clear
+const GRAV = 30;
+const MAXN = 5000;
+
+// ---------- dom ----------
+const $ = id => document.getElementById(id);
+const stage = $('stage');
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  $('startHint').textContent = 'This browser could not start WebGL, so the game cannot run here.';
+  $('startHint').className = 'hint fail';
+  $('playBtn').hidden = true;
+  throw e;
+}
+let pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+renderer.setPixelRatio(pixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const BG = new THREE.Color('#c4733a');
+scene.background = BG;
+scene.fog = new THREE.Fog(BG, 30, 70);
+
+const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 200);
+
+scene.add(new THREE.HemisphereLight('#fff4e0', '#8a4a2a', 1.25));
+const sun = new THREE.DirectionalLight('#ffffff', 2.1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+const SUN_DIR = new THREE.Vector3(-0.45, 1, 0.35).normalize();
+
+// ---------- ground with a real hole ----------
+function plankTexture() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#c4733a'; g.fillRect(0, 0, 256, 256);
+  const tones = ['#c97a3f', '#bd6c33', '#c87738', '#b96a35'];
+  for (let i = 0; i < 8; i++) {
+    g.fillStyle = tones[i % 4]; g.fillRect(i * 32, 0, 32, 256);
+    g.fillStyle = 'rgba(90,40,15,.35)'; g.fillRect(i * 32, 0, 2, 256);
+    for (let k = 0; k < 6; k++) {
+      g.fillStyle = `rgba(110,50,20,${0.06 + Math.random() * 0.08})`;
+      g.fillRect(i * 32 + 4 + Math.random() * 24, 0, 1 + Math.random() * 1.5, 256);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const holeUniform = { value: new THREE.Vector3(0, 0, 0.5) };
+const groundMat = new THREE.MeshLambertMaterial({ map: plankTexture() });
+groundMat.onBeforeCompile = sh => {
+  sh.uniforms.uHole = holeUniform;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nuniform vec3 uHole;')
+    .replace('void main() {', 'void main() {\nif (distance(vWPos.xz, uHole.xy) < uHole.z) discard;');
+};
+const groundGeo = new THREE.PlaneGeometry(1, 1);
+groundGeo.rotateX(-Math.PI / 2);
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.receiveShadow = true;
+scene.add(ground);
+
+const wallMat = new THREE.MeshLambertMaterial({ color: '#8a4520' });
+const walls = new THREE.Group(); scene.add(walls);
+
+// hole visuals: rim, pit walls, floor
+const hole = new THREE.Group(); scene.add(hole);
+const rimGeo = new THREE.RingGeometry(1, 1.13, 64, 1); rimGeo.rotateX(-Math.PI / 2);
+const rim = new THREE.Mesh(rimGeo, new THREE.MeshLambertMaterial({ color: '#ece9f2', polygonOffset: true, polygonOffsetFactor: -2 }));
+rim.position.y = 0.012; rim.receiveShadow = true;
+const rim2Geo = new THREE.RingGeometry(1.13, 1.17, 64, 1); rim2Geo.rotateX(-Math.PI / 2);
+const rim2 = new THREE.Mesh(rim2Geo, new THREE.MeshBasicMaterial({ color: '#7a7488', polygonOffset: true, polygonOffsetFactor: -2 }));
+rim2.position.y = 0.011;
+hole.add(rim, rim2);
+const pitGeo = new THREE.CylinderGeometry(1, 1, 1, 48, 6, true); pitGeo.translate(0, -0.5, 0);
+{
+  const p = pitGeo.attributes.position, col = new Float32Array(p.count * 3);
+  const top = new THREE.Color('#57525e'), bot = new THREE.Color('#000000'), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) { const t = Math.min(1, -p.getY(i) * 2.2); c.copy(top).lerp(bot, t); col.set([c.r, c.g, c.b], i * 3); }
+  pitGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+}
+const pit = new THREE.Mesh(pitGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false }));
+const floorGeo = new THREE.CircleGeometry(1, 48); floorGeo.rotateX(-Math.PI / 2); floorGeo.translate(0, -1, 0);
+const pitFloor = new THREE.Mesh(floorGeo, new THREE.MeshBasicMaterial({ color: '#000', fog: false }));
+const pitGroup = new THREE.Group(); pitGroup.add(pit, pitFloor); hole.add(pitGroup);
+
+// ---------- snack geometry (vertex coloured, flat per triangle) ----------
+const C = h => new THREE.Color(h);
+const hash = (a, b, c) => { const s = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453; return s - Math.floor(s); };
+function paint(geo, fn) {
+  geo = geo.index ? geo.toNonIndexed() : geo;
+  geo.deleteAttribute('uv');
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  for (let t = 0; t < p.count; t += 3) {
+    const cx = (p.getX(t) + p.getX(t + 1) + p.getX(t + 2)) / 3;
+    const cy = (p.getY(t) + p.getY(t + 1) + p.getY(t + 2)) / 3;
+    const cz = (p.getZ(t) + p.getZ(t + 1) + p.getZ(t + 2)) / 3;
+    fn(c, cx, cy, cz, t / 3);
+    for (let k = 0; k < 3; k++) col.set([c.r, c.g, c.b], (t + k) * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
+function merge(list) {
+  let n = 0; for (const g of list) n += g.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  let o = 0;
+  for (const g of list) {
+    pos.set(g.attributes.position.array, o * 3);
+    nor.set(g.attributes.normal.array, o * 3);
+    col.set(g.attributes.color.array, o * 3);
+    o += g.attributes.position.count;
+  }
+  const m = new THREE.BufferGeometry();
+  m.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  m.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  m.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return m;
+}
+const solid = hex => { const c0 = C(hex); return c => c.copy(c0); };
+const SPRINKLES = ['#ffffff', '#5bd1ff', '#ffe14d', '#7ee07e', '#b98cff'].map(C);
+const lathe = (pts, seg) => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg);
+
+const TYPES = [];
+function defType(name, r, h, xp, geo) { const t = { id: TYPES.length, name, r, h, xp, geo }; TYPES.push(t); return t; }
+
+const T_GUM = defType('gumball', 0.16, 0.16, 1, (() => {
+  const a = C('#ffc63a'), b = C('#ffe27d');
+  return paint(new THREE.SphereGeometry(0.16, 12, 8), (c, x, y, z, i) => c.copy(hash(i, 1, 2) < 0.12 ? b : a));
+})());
+const T_CANDY = defType('candy', 0.2, 0.2, 1, (() => {
+  const a = C('#2fa7ea'), b = C('#e2f4ff'), p = C('#ff8fb8');
+  return paint(new THREE.SphereGeometry(0.2, 16, 12), (c, x, y) => {
+    const band = Math.floor((y / 0.2 + 1) * 3.5); c.copy(band === 3 ? p : band % 2 ? b : a);
+  });
+})());
+const T_MAC = defType('macaron', 0.3, 0.11, 1, (() => {
+  const pink = C('#f59ab5'), deep = C('#e47b9b'), cream = C('#fff0d8');
+  const g = lathe([[0, -0.11], [0.2, -0.11], [0.27, -0.095], [0.3, -0.06], [0.285, -0.032], [0.26, -0.028], [0.26, 0.028], [0.285, 0.032], [0.3, 0.06], [0.27, 0.095], [0.2, 0.11], [0, 0.11]], 18);
+  return paint(g, (c, x, y) => c.copy(Math.abs(y) < 0.03 ? cream : (y < -0.085 ? deep : pink)));
+})());
+const T_JELLY = defType('jelly', 0.27, 0.22, 2, (() => {
+  const a = C('#8fd13f'), b = C('#f1f27c');
+  return paint(new THREE.BoxGeometry(0.44, 0.44, 0.44, 4, 4, 4), (c, x) => c.copy(Math.floor((x + 0.22) / 0.11 + 0.001) % 2 ? b : a));
+})());
+const T_SLICE = defType('cake slice', 0.42, 0.25, 3, (() => {
+  const s = new THREE.Shape(); s.moveTo(0, 0); s.lineTo(0.66, -0.2); s.quadraticCurveTo(0.7, 0, 0.66, 0.2); s.lineTo(0, 0);
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.44, bevelEnabled: false, steps: 8 });
+  g.rotateX(-Math.PI / 2); g.translate(-0.38, -0.22, 0);
+  const top = C('#fff1f5'), sponge = C('#f6d27a'), jam = C('#e2475a'), pinkTop = C('#ffb7cf');
+  const body = paint(g, (c, x, y) => c.copy(y > 0.17 ? (y > 0.215 ? pinkTop : top) : Math.abs(y + 0.02) < 0.035 ? jam : sponge));
+  const cherry = paint(new THREE.SphereGeometry(0.075, 10, 8).translate(0.02, 0.29, 0), solid('#d8243e'));
+  return merge([body, cherry]);
+})());
+const T_CUP = defType('cupcake', 0.52, 0.45, 4, (() => {
+  const w1 = C('#3cc0b5'), w2 = C('#26968e'), f1 = C('#ff9cbc'), f2 = C('#ffd3e1');
+  const g = lathe([[0, -0.45], [0.34, -0.45], [0.44, -0.06], [0.5, -0.05], [0.52, 0.02], [0.47, 0.12], [0.38, 0.22], [0.27, 0.31], [0.16, 0.38], [0.05, 0.44], [0, 0.45]], 20);
+  const body = paint(g, (c, x, y, z) => {
+    if (y < -0.055) c.copy(Math.floor((Math.atan2(z, x) + Math.PI) / (Math.PI / 6)) % 2 ? w1 : w2);
+    else c.copy(Math.floor((y + 0.05) / 0.1) % 2 ? f2 : f1);
+  });
+  const cherry = paint(new THREE.SphereGeometry(0.1, 10, 8).translate(0, 0.5, 0), solid('#d8243e'));
+  return merge([body, cherry]);
+})());
+const T_DONUT = defType('donut', 0.7, 0.26, 8, (() => {
+  const dough = C('#e9b270'), icing = C('#ff7aa8');
+  const g = new THREE.TorusGeometry(0.45, 0.25, 16, 40); g.rotateX(Math.PI / 2);
+  return paint(g, (c, x, y, z, i) => {
+    if (y > 0.03) { const hsh = hash(i, 3, 9); c.copy(hsh < 0.16 ? SPRINKLES[Math.floor(hsh * 31) % 5] : icing); }
+    else c.copy(dough);
+  });
+})());
+const T_BURGER = defType('burger', 0.9, 0.55, 15, (() => {
+    const parts = [
+    paint(new THREE.CylinderGeometry(0.84, 0.78, 0.22, 24).translate(0, -0.44, 0), solid('#d99a52')),
+    paint(new THREE.CylinderGeometry(0.9, 0.9, 0.2, 24).translate(0, -0.24, 0), solid('#6b3a1f')),
+    paint(new THREE.BoxGeometry(1.5, 0.05, 1.5).rotateY(Math.PI / 4).translate(0, -0.12, 0), solid('#ffc933')),
+    paint(new THREE.CylinderGeometry(0.95, 0.95, 0.07, 24).translate(0, -0.07, 0), solid('#74c442')),
+    paint(new THREE.SphereGeometry(0.88, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.62, 1).translate(0, -0.04, 0), solid('#e0a35a')),
+  ];
+  for (let k = 0; k < 16; k++) {
+    // sesame seeds sitting on the bun dome
+    const a = k * 2.4, rr = 0.15 + (k % 5) * 0.13, y = -0.04 + 0.545 * Math.sqrt(Math.max(0, 1 - (rr / 0.88) ** 2));
+    parts.push(paint(new THREE.SphereGeometry(0.05, 6, 4).scale(1, 0.5, 1.7).rotateY(a).translate(Math.cos(a) * rr, y, Math.sin(a) * rr), solid('#fff3d6')));
+  }
+  return merge(parts);
+})());
+const T_CAKE = defType('layer cake', 1.5, 1.0, 40, (() => {
+  const parts = [
+    paint(new THREE.CylinderGeometry(1.46, 1.5, 0.6, 32).translate(0, -0.7, 0), solid('#6e3b24')),
+    paint(new THREE.CylinderGeometry(1.44, 1.46, 0.12, 32).translate(0, -0.34, 0), solid('#fff3e0')),
+    paint(new THREE.CylinderGeometry(1.4, 1.44, 0.58, 32).translate(0, 0.01, 0), solid('#f3a2c0')),
+    paint(new THREE.CylinderGeometry(1.4, 1.4, 0.12, 32).translate(0, 0.36, 0), solid('#fff3e0')),
+    paint(new THREE.CylinderGeometry(1.3, 1.4, 0.38, 32).translate(0, 0.61, 0), (c, x, y, z, i) => c.copy(y > 0.75 ? C('#fff8f0') : C('#ffc3d6'))),
+  ];
+  for (let k = 0; k < 8; k++) {
+    const a = k / 8 * Math.PI * 2;
+    parts.push(paint(new THREE.SphereGeometry(0.15, 10, 8).translate(Math.cos(a) * 0.95, 0.9, Math.sin(a) * 0.95), solid('#d8243e')));
+  }
+  parts.push(paint(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 8).translate(0, 1.0, 0), solid('#5bd1ff')));
+  parts.push(paint(new THREE.ConeGeometry(0.08, 0.16, 8).translate(0, 1.28, 0), solid('#ffcc33')));
+  return merge(parts);
+})());
+const T_GIANT = defType('giant donut', 2.2, 0.75, 70, (() => {
+  const dough = C('#e0a060'), icing = C('#5a2e1a');
+  const g = new THREE.TorusGeometry(1.45, 0.75, 24, 64); g.rotateX(Math.PI / 2);
+  return paint(g, (c, x, y, z, i) => {
+    if (y > 0.1) { const hsh = hash(i, 5, 2); c.copy(hsh < 0.18 ? SPRINKLES[Math.floor(hsh * 29) % 5] : icing); }
+    else c.copy(dough);
+  });
+})());
+
+const meshes = TYPES.map(t => {
+  const m = new THREE.InstancedMesh(t.geo, new THREE.MeshLambertMaterial({ vertexColors: true }), 1);
+  m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
+  scene.add(m);
+  return m;
+});
+
+// ---------- simulation state ----------
+const px = new Float32Array(MAXN), py = new Float32Array(MAXN), pz = new Float32Array(MAXN);
+const ox = new Float32Array(MAXN), oy = new Float32Array(MAXN), oz = new Float32Array(MAXN);
+const rad = new Float32Array(MAXN), hh = new Float32Array(MAXN), mass = new Float32Array(MAXN);
+const rx = new Float32Array(MAXN), ry = new Float32Array(MAXN), rz = new Float32Array(MAXN);
+const wx = new Float32Array(MAXN), wz = new Float32Array(MAXN);
+const typ = new Uint8Array(MAXN), st = new Uint8Array(MAXN), sup = new Uint8Array(MAXN), dirty = new Uint8Array(MAXN);
+const slot = new Int32Array(MAXN), stamp = new Int32Array(MAXN);
+let N = 0, order = new Int32Array(MAXN), orderN = 0, frameNo = 0;
+let L = 18;
+
+const G = { level: 1, xp: 0, eaten: 0, eatenXp: 0, totalXp: 0, size: 0, R: RADII[0], hx: 0, hz: 0, tx: 0, tz: 0, playing: false, t0: 0, elapsed: 0, won: false };
+
+function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+function addItem(t, x, y, z, yaw) {
+  if (N >= MAXN) return;
+  const i = N++;
+  px[i] = ox[i] = x; py[i] = oy[i] = y; pz[i] = oz[i] = z;
+  rad[i] = t.r; hh[i] = t.h; mass[i] = t.r * t.r * t.h; typ[i] = t.id; st[i] = 1;
+  rx[i] = rz[i] = wx[i] = wz[i] = 0; ry[i] = yaw; dirty[i] = 1;
+}
+
+function buildLevel(level) {
+  const R = rng(level * 9973 + 17);
+  N = 0;
+  L = Math.min(18 + (level - 1) * 3, 30);
+  const zones = [];
+  function place(r) {
+    for (let tries = 0; tries < 400; tries++) {
+      const x = (R() * 2 - 1) * (L - r - 0.8), z = (R() * 2 - 1) * (L - r - 0.8);
+      if (Math.hypot(x, z) < r + 1.3) continue;
+      if (zones.some(o => Math.hypot(o.x - x, o.z - z) < o.r + r + 0.7)) continue;
+      const zz = { x, z, r }; zones.push(zz); return zz;
+    }
+    return null;
+  }
+  function hexFill(zone, spacing, cb) {
+    const rowH = spacing * 0.866;
+    for (let row = -Math.ceil(zone.r / rowH); row <= Math.ceil(zone.r / rowH); row++) {
+      const off = (row & 1) ? spacing / 2 : 0;
+      for (let col = -Math.ceil(zone.r / spacing) - 1; col <= Math.ceil(zone.r / spacing) + 1; col++) {
+        const lx = col * spacing + off, lz = row * rowH;
+        if (lx * lx + lz * lz > zone.r * zone.r) continue;
+        cb(zone.x + lx, zone.z + lz, lx, lz);
+      }
+    }
+  }
+  const scale = 1 + (level - 1) * 0.25;
+  // macaron groves: tall leaning columns
+  for (let g = 0; g < Math.round(5 * scale); g++) {
+    const z = place(1.0 + R() * 0.7); if (!z) continue;
+    hexFill(z, 0.63, (x, zz, lx, lz) => {
+      const tall = 4 + Math.floor(R() * 9 * (1 - Math.hypot(lx, lz) / (z.r + 0.5)) + R() * 3);
+      const lean = (R() - 0.5) * 0.012, leanZ = (R() - 0.5) * 0.012;
+      for (let k = 0; k < tall; k++) addItem(T_MAC, x + lean * k, T_MAC.h + k * (T_MAC.h * 2 + 0.003), zz + leanZ * k, R() * 6.28);
+    });
+  }
+  // heaps of candy and gumballs, two layers
+  const heap = (t, count, rMin, rVar, spacing) => {
+    for (let g = 0; g < count; g++) {
+      const z = place(rMin + R() * rVar); if (!z) continue;
+      hexFill(z, spacing, (x, zz, lx, lz) => {
+        addItem(t, x + (R() - .5) * .03, t.h, zz + (R() - .5) * .03, R() * 6.28);
+        if (Math.hypot(lx, lz) < z.r * 0.7) addItem(t, x + spacing / 2, t.h * 3 + 0.02, zz + spacing * 0.29, R() * 6.28);
+      });
+    }
+  };
+  heap(T_CANDY, Math.round(3 * scale), 1.2, 0.6, 0.42);
+  heap(T_GUM, Math.round(2 * scale), 1.0, 0.6, 0.34);
+  heap(T_SLICE, Math.round(2 * scale), 1.3, 0.4, 0.87);
+  // jelly blocks stacked in cubes
+  for (let g = 0; g < Math.round(2 * scale); g++) {
+    const n = 3 + Math.floor(R() * 2), s = 0.47;
+    const z = place(n * s * 0.75); if (!z) continue;
+    const layers = 2 + Math.floor(R() * 2);
+    for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) for (let k = 0; k < layers; k++)
+      addItem(T_JELLY, z.x + (a - (n - 1) / 2) * s, T_JELLY.h + k * (T_JELLY.h * 2 + 0.01), z.z + (b - (n - 1) / 2) * s, 0);
+  }
+  // cupcake trays
+  for (let g = 0; g < Math.round(2 * scale); g++) {
+    const z = place(1.7); if (!z) continue;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) addItem(T_CUP, z.x + a * 1.1, T_CUP.h, z.z + b * 1.1, R() * 6.28);
+  }
+  // donuts: singles and stacks
+  for (let g = 0; g < Math.round(9 * scale); g++) {
+    const z = place(0.8); if (!z) continue;
+    const stack = R() < 0.4 ? 2 + Math.floor(R() * 3) : 1;
+    for (let k = 0; k < stack; k++) addItem(T_DONUT, z.x, T_DONUT.h + k * (T_DONUT.h * 2 + 0.01), z.z, R() * 6.28);
+  }
+  for (let g = 0; g < Math.round(6 * scale); g++) {
+    const z = place(1.0); if (!z) continue;
+    addItem(T_BURGER, z.x, T_BURGER.h, z.z, R() * 6.28);
+    if (R() < 0.3) addItem(T_BURGER, z.x, T_BURGER.h * 3 + 0.02, z.z, R() * 6.28);
+  }
+  for (let g = 0; g < Math.round(3 * scale); g++) { const z = place(1.6); if (z) addItem(T_CAKE, z.x, T_CAKE.h, z.z, R() * 6.28); }
+  for (let g = 0; g < Math.round(2 * scale); g++) { const z = place(2.3); if (z) addItem(T_GIANT, z.x, T_GIANT.h, z.z, R() * 6.28); }
+
+  // instance buffers sized per type
+  const counts = TYPES.map(() => 0);
+  for (let i = 0; i < N; i++) slot[i] = counts[typ[i]]++;
+  TYPES.forEach((t, k) => {
+    const old = meshes[k];
+    const m = new THREE.InstancedMesh(t.geo, old.material, Math.max(1, counts[k]));
+    m.castShadow = m.receiveShadow = true; m.frustumCulled = false;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    if (!counts[k]) m.count = 0;
+    scene.remove(old); old.dispose(); scene.add(m); meshes[k] = m;
+  });
+
+  orderN = 0; for (let i = 0; i < N; i++) order[orderN++] = i;
+  G.totalXp = 0; for (let i = 0; i < N; i++) G.totalXp += TYPES[typ[i]].xp;
+  Object.assign(G, { level, xp: 0, eaten: 0, eatenXp: 0, size: 0, R: RADII[0], hx: 0, hz: 0, tx: 0, tz: 0, won: false, elapsed: 0 });
+
+  // arena
+  ground.scale.set(2 * L + 60, 1, 2 * L + 60);
+  groundMat.map.repeat.set((2 * L + 60) / 4, (2 * L + 60) / 4);
+  walls.clear();
+  const wh = 0.5, wt = 0.6;
+  for (const [x, z, w, d] of [[0, -L - wt / 2, 2 * L + 2 * wt, wt], [0, L + wt / 2, 2 * L + 2 * wt, wt], [-L - wt / 2, 0, wt, 2 * L], [L + wt / 2, 0, wt, 2 * L]]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, wh, d), wallMat);
+    m.position.set(x, wh / 2, z); m.castShadow = m.receiveShadow = true; walls.add(m);
+  }
+  // let stacks settle before the player sees them
+  for (let k = 0; k < 90; k++) step(1 / 60, true);
+  for (let i = 0; i < N; i++) dirty[i] = 1;
+  syncInstances();
+  updateHud(true);
+}
+
+// ---------- physics ----------
+const CELL = 1, GRID = 80, GOFF = GRID / 2;
+const head = new Int32Array(GRID * GRID), next = new Int32Array(MAXN);
+const big = new Int32Array(MAXN); let bigN = 0;
+
+function eat(i) {
+  st[i] = 0; dirty[i] = 1;
+  const t = TYPES[typ[i]];
+  G.eaten++; G.eatenXp += t.xp; G.xp += t.xp;
+  onEat(t);
+}
+
+function step(dt, quiet) {
+  frameNo++;
+  const g = GRAV * dt * dt;
+  const R = G.R, hx = G.hx, hz = G.hz, pitDepth = R * 2 + 1.2;
+  const maxV = 0.6;
+
+  // integrate (verlet)
+  for (let n = 0; n < orderN; n++) {
+    const i = order[n];
+    let vx = px[i] - ox[i], vy = py[i] - oy[i], vz = pz[i] - oz[i];
+    if (sup[i]) { vx *= 0.8; vz *= 0.8; } else { vx *= 0.99; vz *= 0.99; }
+    const sp = vx * vx + vz * vz; if (sp > maxV * maxV) { const s = maxV / Math.sqrt(sp); vx *= s; vz *= s; }
+    if (vy < -maxV) vy = -maxV;
+    ox[i] = px[i]; oy[i] = py[i]; oz[i] = pz[i];
+    px[i] += vx; py[i] += vy - g; pz[i] += vz;
+    sup[i] = 0;
+  }
+
+  // collisions, lowest first so stacks resolve in one pass
+  for (let n = 1; n < orderN; n++) {
+    const v = order[n], y = py[v]; let k = n - 1;
+    while (k >= 0 && py[order[k]] > y) { order[k + 1] = order[k]; k--; }
+    order[k + 1] = v;
+  }
+  head.fill(-1); bigN = 0;
+  for (let n = 0; n < orderN; n++) {
+    const i = order[n];
+    if (rad[i] > 0.5) { big[bigN++] = i; continue; }
+    const cx = Math.floor(px[i] / CELL) + GOFF, cz = Math.floor(pz[i] / CELL) + GOFF;
+    if (cx < 0 || cz < 0 || cx >= GRID || cz >= GRID) continue;
+    const c = cz * GRID + cx; next[i] = head[c]; head[c] = i;
+  }
+  const fs = frameNo;
+  const pair = (i, j) => {
+    if (st[i] === 2 && st[j] === 2) return; // inside the pit things just fall past each other
+    const dx = px[j] - px[i], dz = pz[j] - pz[i], rr = rad[i] + rad[j];
+    if (dx > rr || dx < -rr || dz > rr || dz < -rr) return;
+    const dy = py[j] - py[i], hsum = hh[i] + hh[j];
+    if (dy > hsum || dy < -hsum) return;
+    const d2 = dx * dx + dz * dz; if (d2 >= rr * rr) return;
+    const d = Math.sqrt(d2), penH = rr - d, penV = hsum - Math.abs(dy);
+    if (penV < penH * 1.2) {
+      // rest the upper one on the lower one
+      if (dy >= 0) { py[j] += penV; sup[j] = 1; } else { py[i] += penV; sup[i] = 1; }
+    } else {
+      const nx = d > 1e-5 ? dx / d : 1, nz = d > 1e-5 ? dz / d : 0;
+      const wi = mass[j] / (mass[i] + mass[j]), wj = 1 - wi;
+      px[i] -= nx * penH * wi; pz[i] -= nz * penH * wi;
+      px[j] += nx * penH * wj; pz[j] += nz * penH * wj;
+    }
+  };
+  for (let n = 0; n < orderN; n++) {
+    const i = order[n];
+    stamp[i] = fs;
+    const range = rad[i] > 0.5 ? Math.ceil((rad[i] + 0.5) / CELL) : 1;
+    const cx = Math.floor(px[i] / CELL) + GOFF, cz = Math.floor(pz[i] / CELL) + GOFF;
+    for (let a = Math.max(0, cz - range); a <= Math.min(GRID - 1, cz + range); a++) {
+      for (let b = Math.max(0, cx - range); b <= Math.min(GRID - 1, cx + range); b++) {
+        for (let j = head[a * GRID + b]; j !== -1; j = next[j]) if (stamp[j] !== fs) pair(i, j);
+      }
+    }
+    for (let k = 0; k < bigN; k++) { const j = big[k]; if (j !== i && stamp[j] !== fs) pair(i, j); }
+  }
+
+  // ground, hole and arena
+  const fitR = R * FIT;
+  let removed = false;
+  for (let n = 0; n < orderN; n++) {
+    const i = order[n];
+    const dx = px[i] - hx, dz = pz[i] - hz, d = Math.sqrt(dx * dx + dz * dz) || 1e-5;
+    if (st[i] === 2) {
+      const lim = Math.max(0, R - rad[i] * 0.8);
+      if (d > lim) { px[i] = hx + dx / d * lim; pz[i] = hz + dz / d * lim; }
+      rx[i] += wx[i]; rz[i] += wz[i];
+      if (py[i] < -pitDepth) { if (!quiet) eat(i); else st[i] = 0; removed = true; }
+    } else {
+      const fits = rad[i] <= fitR;
+      if (fits && d < R * 0.98) {
+        // over the hole: no floor, so it drops straight down and tips toward the middle
+        rx[i] += (-dz / d) * 0.06; rz[i] += (dx / d) * 0.06;
+        if (py[i] - hh[i] < -0.03) {
+          st[i] = 2;
+          wx[i] = (Math.random() - 0.5) * 0.25; wz[i] = (Math.random() - 0.5) * 0.25;
+        }
+      } else {
+        if (py[i] < hh[i]) { py[i] = hh[i]; sup[i] = 1; }
+        if (fits && d < R + rad[i] * 0.9) {
+          const k = 0.02 * (1 - (d - R) / (rad[i] * 0.9 + 0.001));
+          px[i] -= dx / d * Math.max(0, k); pz[i] -= dz / d * Math.max(0, k);
+        } else if (!fits && d < R + rad[i] * 0.5) {
+          const push = (R + rad[i] * 0.5 - d) * 0.3;
+          px[i] += dx / d * push; pz[i] += dz / d * push;
+        }
+        if (sup[i]) { rx[i] *= 0.8; rz[i] *= 0.8; }
+      }
+      const lim = L - rad[i] * 0.7;
+      if (px[i] > lim) px[i] = lim; else if (px[i] < -lim) px[i] = -lim;
+      if (pz[i] > lim) pz[i] = lim; else if (pz[i] < -lim) pz[i] = -lim;
+    }
+    // contacts may lift an item to rest it, but must never launch it
+    if (py[i] - oy[i] > 0.04) oy[i] = py[i] - 0.04;
+    if (Math.abs(px[i] - ox[i]) + Math.abs(py[i] - oy[i]) + Math.abs(pz[i] - oz[i]) > 1e-4 || st[i] === 2 || rx[i] !== 0) dirty[i] = 1;
+  }
+  if (removed) {
+    let w = 0;
+    for (let n = 0; n < orderN; n++) if (st[order[n]]) order[w++] = order[n];
+    orderN = w;
+  }
+}
+
+const dummy = new THREE.Object3D();
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function syncInstances() {
+  const touched = new Uint8Array(TYPES.length);
+  for (let i = 0; i < N; i++) {
+    if (!dirty[i]) continue;
+    dirty[i] = 0;
+    const m = meshes[typ[i]];
+    touched[typ[i]] = 1;
+    if (!st[i]) { m.setMatrixAt(slot[i], ZERO); continue; }
+    if (Math.abs(rx[i]) < 1e-3) rx[i] = 0;
+    if (Math.abs(rz[i]) < 1e-3) rz[i] = 0;
+    dummy.position.set(px[i], py[i], pz[i]);
+    dummy.rotation.set(rx[i], ry[i], rz[i]);
+    dummy.updateMatrix();
+    m.setMatrixAt(slot[i], dummy.matrix);
+  }
+  touched.forEach((t, k) => { if (t) meshes[k].instanceMatrix.needsUpdate = true; });
+}
+
+// ---------- input ----------
+let drag = null;
+const keys = {};
+// mouse: the hole follows the cursor, no clicking needed. touch and pen: drag anywhere.
+let mouse = null;
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (!G.playing || e.pointerType === 'mouse') return;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  renderer.domElement.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') { mouse = { x: e.clientX, y: e.clientY }; return; }
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.x = e.clientX; drag.y = e.clientY;
+  const wpp = 2 * camDist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / window.innerHeight;
+  const sens = 1.35;
+  G.tx += dx * wpp * sens; G.tz += dy * wpp * sens * 1.25;
+  const lim = L - G.R * 0.4;
+  G.tx = THREE.MathUtils.clamp(G.tx, -lim, lim); G.tz = THREE.MathUtils.clamp(G.tz, -lim, lim);
+  e.preventDefault();
+});
+const endDrag = e => { if (drag && e.pointerId === drag.id) drag = null; };
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+renderer.domElement.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') mouse = null; });
+window.addEventListener('blur', () => { mouse = null; });
+const ray = new THREE.Raycaster(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), ndc = new THREE.Vector2(), hit = new THREE.Vector3();
+function followMouse() {
+  if (!mouse) return;
+  ndc.set(mouse.x / window.innerWidth * 2 - 1, -(mouse.y / window.innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  if (!ray.ray.intersectPlane(groundPlane, hit)) return;
+  // the further the cursor is from the hole, the faster it slides toward it
+  const lim = L - G.R * 0.4;
+  G.tx = THREE.MathUtils.clamp(G.hx + (hit.x - G.hx) * 0.08, -lim, lim);
+  G.tz = THREE.MathUtils.clamp(G.hz + (hit.z - G.hz) * 0.08, -lim, lim);
+}
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', e => e.preventDefault());
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ---------- sound ----------
+let audio = null, soundOn = true, lastPop = 0, combo = 0, lastEat = 0;
+try { soundOn = localStorage.getItem('snackhole-sound') !== 'off'; } catch (e) {}
+function initAudio() {
+  if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+}
+function tone(freq, dur, type = 'triangle', vol = 0.07, when = 0) {
+  if (!audio || !soundOn) return;
+  const t = audio.currentTime + when, o = audio.createOscillator(), gn = audio.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq * 1.6, t + dur);
+  gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(gn).connect(audio.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function renderSoundBtn() {
+  $('soundWave').style.display = soundOn ? '' : 'none';
+  $('soundBtn').setAttribute('aria-label', soundOn ? 'Sound on' : 'Sound off');
+}
+$('soundBtn').addEventListener('click', () => {
+  soundOn = !soundOn; renderSoundBtn(); initAudio();
+  try { localStorage.setItem('snackhole-sound', soundOn ? 'on' : 'off'); } catch (e) {}
+});
+renderSoundBtn();
+
+// ---------- feedback ----------
+let rimPulse = 0, popQueue = 0, popAcc = 0;
+const tmpV = new THREE.Vector3();
+function toScreen(x, y, z) {
+  tmpV.set(x, y, z).project(camera);
+  return [(tmpV.x * 0.5 + 0.5) * window.innerWidth, (-tmpV.y * 0.5 + 0.5) * window.innerHeight];
+}
+let livePops = 0;
+function spawnPop(text) {
+  if (livePops > 18) return;
+  const [sx, sy] = toScreen(G.hx, 0.4, G.hz);
+  const el = document.createElement('div');
+  el.className = 'pop'; el.textContent = text;
+  el.style.left = (sx + (Math.random() - 0.5) * 60) + 'px';
+  el.style.top = (sy - 30 + (Math.random() - 0.5) * 30) + 'px';
+  el.style.setProperty('--dx', ((Math.random() - 0.5) * 40) + 'px');
+  document.body.appendChild(el); livePops++;
+  setTimeout(() => { el.remove(); livePops--; }, 820);
+}
+function onEat(t) {
+  rimPulse = Math.min(rimPulse + 0.04, 0.12);
+  const now = performance.now();
+  combo = now - lastEat < 400 ? combo + 1 : 0; lastEat = now;
+  popQueue += t.xp;
+  if (now - lastPop > 45) { tone(380 + Math.min(combo, 24) * 28, 0.07); lastPop = now; }
+  while (G.size < RADII.length - 1 && G.xp >= XP_AT[G.size + 1]) levelUp();
+  updateHud();
+}
+function levelUp() {
+  G.size++;
+  const tag = $('sizeTag'); tag.classList.remove('bump'); void tag.offsetWidth; tag.classList.add('bump');
+  const b = document.createElement('div'); b.className = 'levelup'; b.textContent = `Size ${G.size + 1}!`;
+  document.body.appendChild(b); setTimeout(() => b.remove(), 1450);
+  [523, 659, 784, 1046].forEach((f, k) => tone(f, 0.16, 'square', 0.04, k * 0.07));
+}
+function updateHud(force) {
+  const goal = G.totalXp * GOAL;
+  const pct = Math.min(1, G.eatenXp / goal);
+  $('goalFill').style.width = (pct * 100).toFixed(1) + '%';
+  $('goalLabel').textContent = `${Math.floor(pct * 100)}% · ${G.eaten} snacks`;
+  $('levelChip').textContent = `Level ${G.level}`;
+  $('sizeText').textContent = `Size ${G.size + 1}`;
+  const lo = XP_AT[G.size], hi = XP_AT[G.size + 1] ?? lo + 1;
+  $('sizeFill').style.width = (G.size >= RADII.length - 1 ? 100 : Math.min(100, (G.xp - lo) / (hi - lo) * 100)) + '%';
+  if (!G.won && pct >= 1 && G.playing) win();
+}
+function fmtTime(s) { s = Math.floor(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+function win() {
+  G.won = true; G.playing = false; drag = null;
+  $('winTitle').textContent = `Level ${G.level} cleared`;
+  $('statItems').textContent = G.eaten;
+  $('statSize').textContent = G.size + 1;
+  $('statTime').textContent = fmtTime(G.elapsed);
+  setTimeout(() => { $('winScreen').hidden = false; $('nextBtn').focus(); }, 600);
+  [659, 784, 988, 1318].forEach((f, k) => tone(f, 0.22, 'triangle', 0.06, k * 0.11));
+}
+
+function startLevel(level) {
+  buildLevel(level);
+  $('startScreen').hidden = true; $('winScreen').hidden = true;
+  $('hud').hidden = false; $('sizeTag').hidden = false;
+  G.playing = true;
+}
+$('playBtn').addEventListener('click', () => { initAudio(); startLevel(G.level); });
+$('nextBtn').addEventListener('click', () => { initAudio(); startLevel(G.level + 1); });
+$('restartBtn').addEventListener('click', () => { initAudio(); startLevel(G.level); });
+
+// ---------- camera & loop ----------
+let camDist = 8;
+const camTarget = new THREE.Vector3();
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+let last = performance.now(), acc = 0, slowTime = 0;
+function tick() {
+  // hole chases the finger with a speed cap so the physics keeps up
+  const mx = G.tx - G.hx, mz = G.tz - G.hz, md = Math.hypot(mx, mz), cap = 0.32 + G.R * 0.12;
+  if (md > cap) { G.hx += mx / md * cap; G.hz += mz / md * cap; } else { G.hx = G.tx; G.hz = G.tz; }
+  G.R += (RADII[G.size] - G.R) * 0.06;
+  step(STEP, false);
+}
+const STEP = 1 / 60;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.1, (now - last) / 1000); last = now;
+
+  if (G.playing) {
+    G.elapsed += dt;
+    const kx = (keys['arrowright'] || keys['d'] ? 1 : 0) - (keys['arrowleft'] || keys['a'] ? 1 : 0);
+    const kz = (keys['arrowdown'] || keys['s'] ? 1 : 0) - (keys['arrowup'] || keys['w'] ? 1 : 0);
+    followMouse();
+    if (kx || kz) {
+      const lim = L - G.R * 0.4, sp = (5 + G.R * 2) * dt;
+      G.tx = THREE.MathUtils.clamp(G.hx + kx * sp * 3, -lim, lim);
+      G.tz = THREE.MathUtils.clamp(G.hz + kz * sp * 3, -lim, lim);
+    }
+  }
+  acc += dt;
+  let steps = 0;
+  while (acc >= STEP && steps < 3) {
+    tick();
+    acc -= STEP; steps++;
+  }
+  if (steps === 3) acc = 0;
+  if (popQueue > 0) {
+    popAcc += dt;
+    if (popAcc > 0.06) { spawnPop('+' + Math.min(popQueue, 99)); popQueue = 0; popAcc = 0; }
+  }
+  syncInstances();
+
+  // hole visuals
+  rimPulse *= 0.88;
+  const vr = G.R * (1 + rimPulse * 0.4);
+  holeUniform.value.set(G.hx, G.hz, G.R);
+  hole.position.set(G.hx, 0, G.hz);
+  rim.scale.set(vr, 1, vr); rim2.scale.set(vr, 1, vr);
+  pitGroup.scale.set(G.R, G.R * 2 + 1.6, G.R);
+
+  // camera follows from a tilted overhead view, pulling back as the hole grows
+  const wantDist = 8 + G.R * 5;
+  camDist += (wantDist - camDist) * 0.05;
+  camTarget.x += (G.hx - camTarget.x) * 0.2;
+  camTarget.z += (G.hz - camTarget.z) * 0.2;
+  const tilt = THREE.MathUtils.degToRad(57);
+  const portrait = window.innerHeight > window.innerWidth ? 1 : 0.8;
+  const dist = camDist * portrait;
+  camera.position.set(camTarget.x, Math.sin(tilt) * dist, camTarget.z + Math.cos(tilt) * dist);
+  camera.lookAt(camTarget.x, 0, camTarget.z - G.R * 0.4);
+  scene.fog.near = dist * 1.6; scene.fog.far = dist * 4.2;
+
+  const span = dist * 1.3;
+  sun.position.copy(camTarget).addScaledVector(SUN_DIR, 30);
+  sun.target.position.copy(camTarget);
+  const sc = sun.shadow.camera;
+  if (sc.right !== span) { sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 1; sc.far = 80; sc.updateProjectionMatrix(); }
+
+  // size tag under the hole
+  const [sx, sy] = toScreen(G.hx, 0, G.hz + G.R * 1.25);
+  $('sizeTag').style.transform = `translate(${sx}px, ${sy}px) translate(-50%, 0)`;
+
+  renderer.render(scene, camera);
+
+  // drop resolution on phones that struggle
+  if (dt > 0.026) slowTime += dt; else slowTime = Math.max(0, slowTime - dt * 0.5);
+  if (slowTime > 2 && pixelRatio > 1.2) { pixelRatio = Math.max(1, pixelRatio - 0.5); renderer.setPixelRatio(pixelRatio); resize(); slowTime = 0; }
+}
+
+// boot: show a live level behind the start card
+function boot(data) {
+  G.level = (data && data.level) || 1;
+  buildLevel(G.level);
+  if (data && data.playing) startLevel(G.level);
+  requestAnimationFrame(frame);
+}
+window.claude?.hot?.snapshot?.(() => ({ level: G.level, playing: G.playing }));
+window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});
+window.__snack = { G, dbg: { py, oy, st, hh, order, get n() { return orderN; } }, get N() { return N; }, get alive() { return orderN; },
+  run(n, path) { const t = performance.now(); for (let k = 0; k < n; k++) { if (path) { const [x, z] = path(k); G.tx = x; G.tz = z; } tick(); } camTarget.set(G.hx, 0, G.hz); camDist = 8 + G.R * 5; syncInstances(); return (performance.now() - t) / n; } };
+</script>
+</body>
+</html>
