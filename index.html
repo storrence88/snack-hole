@@ -748,15 +748,22 @@ renderer.domElement.addEventListener('pointercancel', endDrag);
 renderer.domElement.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') mouse = null; });
 window.addEventListener('blur', () => { mouse = null; });
 const ray = new THREE.Raycaster(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), ndc = new THREE.Vector2(), hit = new THREE.Vector3();
-function followMouse() {
+function followMouse(dt) {
   if (!mouse) return;
   ndc.set(mouse.x / window.innerWidth * 2 - 1, -(mouse.y / window.innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   if (!ray.ray.intersectPlane(groundPlane, hit)) return;
-  // the further the cursor is from the hole, the faster it slides toward it
+  // the further the cursor is from the hole, the faster it slides, up to a steady top speed
+  const dx = hit.x - G.hx, dz = hit.z - G.hz, d = Math.hypot(dx, dz);
+  if (d < G.R * 0.25) { G.tx = G.hx; G.tz = G.hz; return; }
+  const speed = Math.min(maxSpeed(), d * 3) * dt;
+  steerTo(G.hx + dx / d * speed, G.hz + dz / d * speed);
+}
+function maxSpeed() { return 6 + G.R * 1.6; }   // world units per second
+function steerTo(x, z) {
   const lim = L - G.R * 0.4;
-  G.tx = THREE.MathUtils.clamp(G.hx + (hit.x - G.hx) * 0.08, -lim, lim);
-  G.tz = THREE.MathUtils.clamp(G.hz + (hit.z - G.hz) * 0.08, -lim, lim);
+  G.tx = THREE.MathUtils.clamp(x, -lim, lim);
+  G.tz = THREE.MathUtils.clamp(z, -lim, lim);
 }
 document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -883,11 +890,10 @@ function frame(now) {
     G.elapsed += dt;
     const kx = (keys['arrowright'] || keys['d'] ? 1 : 0) - (keys['arrowleft'] || keys['a'] ? 1 : 0);
     const kz = (keys['arrowdown'] || keys['s'] ? 1 : 0) - (keys['arrowup'] || keys['w'] ? 1 : 0);
-    followMouse();
+    followMouse(dt);
     if (kx || kz) {
-      const lim = L - G.R * 0.4, sp = (5 + G.R * 2) * dt;
-      G.tx = THREE.MathUtils.clamp(G.hx + kx * sp * 3, -lim, lim);
-      G.tz = THREE.MathUtils.clamp(G.hz + kz * sp * 3, -lim, lim);
+      const sp = maxSpeed() * dt / Math.hypot(kx, kz);
+      steerTo(G.hx + kx * sp, G.hz + kz * sp);
     }
   }
   acc += dt;
